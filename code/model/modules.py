@@ -71,9 +71,9 @@ class CGBlock(nn.Module):
 
     def forward(self, scatter_numbers, s, c):
         prev_s_shape, prev_c_shape = s.shape, c.shape
-        s = self.s_mlp(s.view(-1, s.shape[-1])).view(prev_s_shape)
-        c = self.c_mlp(c.view(-1, c.shape[-1])).view(prev_c_shape)
-        s = s * c
+        s = self.s_mlp(s.view(-1, s.shape[-1])).view(prev_s_shape) #(42,11,128)
+        c = self.c_mlp(c.view(-1, c.shape[-1])).view(prev_c_shape) #(42,1,128)
+        s = s * c # (42,11,128)
         if self._config["agg_mode"] == "max":
             aggregated_c = torch.max(s, dim=1, keepdim=True)[0]
         elif self._config["agg_mode"] in ["mean", "avg"]:
@@ -109,7 +109,7 @@ class MCGBlock(nn.Module):
 
     def _compute_running_mean(self, prevoius_mean, new_value, i):
         if self._config["running_mean_mode"] == "real":
-            result = (prevoius_mean * i + new_value) / i
+            result = (prevoius_mean * i + new_value) / i #TODO 不应该是i+1?
         elif self._config["running_mean_mode"] == "sliding":
             assert self._config["alpha"] + self._config["beta"] == 1
             result = self._config["alpha"] * prevoius_mean + self._config["beta"] * new_value
@@ -122,7 +122,7 @@ class MCGBlock(nn.Module):
             c = torch.ones(s.shape[0], 1, self.n_in, requires_grad=True).cuda()
         else:
             assert not self._config["identity_c_mlp"]
-        c = self._repeat_tensor(c, scatter_numbers)
+        c = self._repeat_tensor(c, scatter_numbers) #输出（B，1，128）
         assert torch.isfinite(s).all()
         assert torch.isfinite(c).all()
         running_mean_s, running_mean_c = s, c
@@ -137,7 +137,7 @@ class MCGBlock(nn.Module):
         if return_s:
             return running_mean_s 
         if aggregate_batch:
-            return scatter_max(running_mean_c, scatter_idx, dim=0)[0]
+            return scatter_max(running_mean_c, scatter_idx, dim=0)[0]# 输入（B，1，256）
         return running_mean_c
 
 
@@ -145,9 +145,9 @@ class Decoder(nn.Module):
     def __init__(self, config):
         super().__init__()
         self._config = config
-        self._return_embedding = config["return_embedding"]
+        self._return_embedding = config["return_embedding"] # False
         self._learned_anchor_embeddings = torch.empty(
-            (1, config["n_trajectories"], config["size"]))
+            (1, config["n_trajectories"], config["size"])) #(1,6,640)
         stdv = 1. / math.sqrt(config["size"])
         # stdv = 1. / config["size"]
         # nn.init.xavier_normal_(self._learned_anchor_embeddings)
@@ -163,12 +163,12 @@ class Decoder(nn.Module):
         assert torch.isfinite(final_embedding).all()
         trajectories_embeddings = self._mcg_predictor(
             target_scatter_numbers, target_scatter_idx, self._learned_anchor_embeddings,
-            final_embedding, return_s=True)
+            final_embedding, return_s=True)# 输出（B,6,640）
         assert torch.isfinite(trajectories_embeddings).all()
         if self._return_embedding:
             return trajectories_embeddings
         # 
-        res = self._mlp_decoder(trajectories_embeddings)
+        res = self._mlp_decoder(trajectories_embeddings) #（B,6,401）
         coordinates = res[:, :, :80 * 2].reshape(
             batch_size, self._config["n_trajectories"], 80, 2)
         assert torch.isfinite(coordinates).all()
@@ -189,7 +189,7 @@ class Decoder(nn.Module):
                 torch.exp(a) * torch.cosh(b), torch.sinh(b),
                 torch.sinh(b), torch.exp(-a) * torch.cosh(b)
             ], axis=-1) * torch.exp(c)).reshape(
-                coordinates.shape[0], coordinates.shape[1], coordinates.shape[2], 2, 2)
+                coordinates.shape[0], coordinates.shape[1], coordinates.shape[2], 2, 2)#（B,6,80,2,2）
         else:
             _zeros, _ones = torch.zeros_like(a), torch.ones_like(a)
             covariance_matrices = torch.cat([_ones, _zeros, _zeros, _ones], axis=-1).reshape(
@@ -225,7 +225,7 @@ class DecoderHandler(nn.Module):
             return stacked_embeddings, self._n_decoders / random_head_selector.sum()
         else:
             for coeff, decoder in zip(random_head_selector, self._decoders):
-                probas, coordinates, covariance_matrices = decoder(
+                probas, coordinates, covariance_matrices = decoder( #(42, 6), (42, 6, 80, 2), (42, 6, 80, 2, 2)
                     target_scatter_numbers, target_scatter_idx, final_embedding, batch_size)
                 probas, coordinates, covariance_matrices = [
                     coeff * x + (1 - coeff) * x.detach() for x in [
@@ -322,10 +322,10 @@ class HistoryEncoder(nn.Module):
         self._position_mcg = MCGBlock(config["position_mcg_config"])
 
     def forward(self, scatter_numbers, scatter_idx, lstm_data, lstm_data_diff, mcg_data):
-        position_lstm_embedding = self._position_lstm(lstm_data)[0][:, -1:, :]
-        position_diff_lstm_embedding = self._position_diff_lstm(lstm_data_diff)[0][:, -1:, :]
+        position_lstm_embedding = self._position_lstm(lstm_data)[0][:, -1:, :]# -1：， 取的最后一个(B,1,64)
+        position_diff_lstm_embedding = self._position_diff_lstm(lstm_data_diff)[0][:, -1:, :] # (B,1,64)
         position_mcg_embedding = self._position_mcg(
-            scatter_numbers, scatter_idx, mcg_data, aggregate_batch=False)
+            scatter_numbers, scatter_idx, mcg_data, aggregate_batch=False)# 输入(B,11,128), 输出（B, 1, 128）
         return torch.cat([
             position_lstm_embedding, position_diff_lstm_embedding, position_mcg_embedding], axis=-1)
 

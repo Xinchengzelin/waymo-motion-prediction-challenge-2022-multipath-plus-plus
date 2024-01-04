@@ -13,8 +13,8 @@ class MultiPathPP(nn.Module):
         self._polyline_encoder = NormalMLP(config["polyline_encoder"])
         self._history_mcg_encoder = MCGBlock(config["history_mcg_encoder"])
         self._interaction_mcg_encoder = MCGBlock(config["interaction_mcg_encoder"])
-        self._agent_and_interaction_linear = NormalMLP(config["agent_and_interaction_linear"])
-        self._roadgraph_mcg_encoder = MCGBlock(config["roadgraph_mcg_encoder"])
+        self._agent_and_interaction_linear = NormalMLP(config["agent_and_interaction_linear"]) #[512, 256, 128]
+        self._roadgraph_mcg_encoder = MCGBlock(config["roadgraph_mcg_encoder"]) # in 128, out 128
         self._decoder_handler = DecoderHandler(config["decoder_handler_config"])
         if config["multiple_predictions"]:
             self._decoder = Decoder(config["final_decoder"])
@@ -24,44 +24,44 @@ class MultiPathPP(nn.Module):
             self._mha_decoder = MHA(config["mha_decoder"])
     
     def forward(self, data, num_steps):
-        target_scatter_numbers = torch.ones(data["batch_size"], dtype=torch.long).cuda()
+        target_scatter_numbers = torch.ones(data["batch_size"], dtype=torch.long).cuda() # data["batch_size"]= 42
         target_scatter_idx = torch.arange(data["batch_size"], dtype=torch.long).cuda()
-        target_mcg_input_data_linear = self._agent_mcg_linear(data["target/history/mcg_input_data"])
+        target_mcg_input_data_linear = self._agent_mcg_linear(data["target/history/mcg_input_data"]) # (B,11,24)->(B,11,128)
         assert torch.isfinite(target_mcg_input_data_linear).all()
         target_agents_embeddings = self._agent_history_encoder(
-            target_scatter_numbers, target_scatter_idx, data["target/history/lstm_data"],
-            data["target/history/lstm_data_diff"], target_mcg_input_data_linear)
+            target_scatter_numbers, target_scatter_idx, data["target/history/ "], #(B,11,13)
+            data["target/history/lstm_data_diff"], target_mcg_input_data_linear) #(B,10,11), 输出（B，1，256）
         assert torch.isfinite(target_agents_embeddings).all()
         other_mcg_input_data_linear = self._interaction_mcg_linear(
-            data["other/history/mcg_input_data"])
+            data["other/history/mcg_input_data"]) # 输入（3010，11，24） 输出（3010，11，128）
         assert torch.isfinite(other_mcg_input_data_linear).all()
 
         interaction_agents_embeddings = self._interaction_history_encoder(
             data["other_agent_history_scatter_numbers"], data["other_agent_history_scatter_idx"],
             data["other/history/lstm_data"], data["other/history/lstm_data_diff"],
-            other_mcg_input_data_linear)
+            other_mcg_input_data_linear) #输出(3010,1,256)
         assert torch.isfinite(interaction_agents_embeddings).all()
         target_mcg_embedding = self._history_mcg_encoder(
-            target_scatter_numbers, target_scatter_idx, target_agents_embeddings)
+            target_scatter_numbers, target_scatter_idx, target_agents_embeddings) # 输出(B，1，256)
         assert torch.isfinite(target_mcg_embedding).all()
         interaction_mcg_embedding = self._interaction_mcg_encoder(
             data["other_agent_history_scatter_numbers"], data["other_agent_history_scatter_idx"],
-            interaction_agents_embeddings, target_agents_embeddings)
+            interaction_agents_embeddings, target_agents_embeddings) #输出(B，1，256)
         assert torch.isfinite(interaction_mcg_embedding).all()
-        segment_embeddings = self._polyline_encoder(data["road_network_embeddings"])
+        segment_embeddings = self._polyline_encoder(data["road_network_embeddings"])#输入(N,1,27)输出(N,1,128)
         assert torch.isfinite(segment_embeddings).all()
         target_and_interaction_embedding = torch.cat(
-            [target_mcg_embedding, interaction_mcg_embedding], axis=-1)
+            [target_mcg_embedding, interaction_mcg_embedding], axis=-1) #(B,1,512)
         assert torch.isfinite(target_and_interaction_embedding).all()
         target_and_interaction_embedding_linear = self._agent_and_interaction_linear(
-            target_and_interaction_embedding)
+            target_and_interaction_embedding) #(B,1,128)
         assert torch.isfinite(target_and_interaction_embedding_linear).all()
         roadgraph_mcg_embedding = self._roadgraph_mcg_encoder(
             data["road_network_scatter_numbers"], data["road_network_scatter_idx"],
-            segment_embeddings, target_and_interaction_embedding_linear)
+            segment_embeddings, target_and_interaction_embedding_linear) #输入s(N,1,128) N很大，地图多段线数量,输入c(B,1,512)输出(B,1,128)
         assert torch.isfinite(roadgraph_mcg_embedding).all()
         final_embedding = torch.cat(
-            [target_mcg_embedding, interaction_mcg_embedding, roadgraph_mcg_embedding], dim=-1)
+            [target_mcg_embedding, interaction_mcg_embedding, roadgraph_mcg_embedding], dim=-1)# (B,1,640)
         assert torch.isfinite(final_embedding).all()
         if self._config["multiple_predictions"]:
             if self._config["make_em"]:
@@ -80,7 +80,7 @@ class MultiPathPP(nn.Module):
                 target_scatter_numbers, target_scatter_idx, trajectories_embeddings,
                 data["batch_size"])
         else:
-            probas, coordinates, covariance_matrices, loss_coeff = self._decoder_handler(
+            probas, coordinates, covariance_matrices, loss_coeff = self._decoder_handler(#输出(42, 6), (42, 6, 80, 2), (42, 6, 80, 2, 2)
                 target_scatter_numbers, target_scatter_idx, final_embedding, data["batch_size"])
             assert probas.shape[1] == coordinates.shape[1] == covariance_matrices.shape[1] == 6
         assert torch.isfinite(probas).all()

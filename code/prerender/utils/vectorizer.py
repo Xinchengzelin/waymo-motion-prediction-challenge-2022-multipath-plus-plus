@@ -84,7 +84,7 @@ class MultiPathPPRenderer(Renderer):
     
     def _preprocess_data(self, data):
         valid_roadnetwork_selector = data["roadgraph_samples/valid"]
-        for key in get_filter_valid_roadnetwork_keys():
+        for key in get_filter_valid_roadnetwork_keys(): #["roadgraph_samples/xyz", "roadgraph_samples/id", "roadgraph_samples/type", "roadgraph_samples/valid"]
             data[key] = filter_valid(data[key], valid_roadnetwork_selector)
         agents_with_any_validity_selector = self._select_agents_with_any_validity(data)
         for key in get_filter_valid_anget_history():
@@ -103,18 +103,18 @@ class MultiPathPPRenderer(Renderer):
         result = []
         segment_types = []
         for polyline_id in np.unique(node_id):
-            polyline_nodes = node_xyz[node_id == polyline_id]
+            polyline_nodes = node_xyz[node_id == polyline_id] # 一条线
             polyline_type = node_type[node_id == polyline_id][0]
             if len(polyline_nodes) == 1:
                 polyline_nodes = np.array([polyline_nodes[0], polyline_nodes[0]])
             if "drop_segments" in self._config:
                 selector = np.arange(len(polyline_nodes), step=self._config["drop_segments"])
-                if len(polyline_nodes) <= self._config["drop_segments"]:
+                if len(polyline_nodes) <= self._config["drop_segments"]: # 小于4个点的drop掉
                     selector = np.array([0, len(polyline_nodes) - 1])
                 selector[-1] = len(polyline_nodes) - 1
                 polyline_nodes = polyline_nodes[selector]
             polyline_start_end = np.array(
-                [polyline_nodes[:-1], polyline_nodes[1:]]).transpose(1, 0, 2)
+                [polyline_nodes[:-1], polyline_nodes[1:]]).transpose(1, 0, 2)# (N,2,2)
             result.append(polyline_start_end)
 
             segment_types.extend([polyline_type] * len(polyline_start_end))
@@ -122,8 +122,8 @@ class MultiPathPPRenderer(Renderer):
         assert len(segment_types) == len(result), \
             f"Number of segments {len(result)} doen't match the number of types {len(segment_types)}"
         return {
-            "segments": result,
-            "segment_types": np.array(segment_types)}
+            "segments": result, # (N,2,2) 2,2表示起点终点的两个坐标
+            "segment_types": np.array(segment_types)} #(N,1)
     
     def _split_past_and_future(self, data, key):
         history = np.concatenate(
@@ -152,7 +152,7 @@ class MultiPathPPRenderer(Renderer):
         return preprocessed_data
     
     def _transfrom_to_agent_coordinate_system(self, coordinates, shift, yaw):
-        # coordinates
+        # coordinates 转换到障碍物坐标系
         # dim 0: number of agents / number of segments for road network
         # dim 1: number of history points / (start_point, end_point) for segments
         # dim 2: x, y
@@ -170,30 +170,30 @@ class MultiPathPPRenderer(Renderer):
             f"n_segments={len(segments)} must match len_types={len(types)}"
         return self._segment_filter.filter(segments, types)
     
-    def _compute_closest_point_of_segment(self, segments):
+    def _compute_closest_point_of_segment(self, segments):# TODO segments (N,2,2) 返回其中两个点中距离近的点
         # This method works only with road segments in agent-related coordinate system
         assert len(segments.shape) == 3
         assert segments.shape[1] == segments.shape[2] == 2
-        A, B = segments[:, 0, :], segments[:, 1, :]
+        A, B = segments[:, 0, :], segments[:, 1, :] # (N,2),(N,2)
         M = B - A
-        t = (-A * M).sum(axis=-1) / ((M * M).sum(axis=-1) + 1e-6)
+        t = (-A * M).sum(axis=-1) / ((M * M).sum(axis=-1) + 1e-6) # 分子： 分母：vector长度的平方
         clipped_t = np.clip(t, 0, 1)[:, None]
         closest_points = A + clipped_t * M
         return closest_points
     
-    def _generate_segment_embeddings(self, segments, types):
+    def _generate_segment_embeddings(self, segments, types): # segments: (N,2,2)  types(N,)
         # This method works only with road segments in agent-related coordinate system
         # previously filtered
-        closest_points = self._compute_closest_point_of_segment(segments)
-        r_norm = np.linalg.norm(closest_points, axis=-1, keepdims=True)
-        r_unit_vector = closest_points / (r_norm + 1e-6)
+        closest_points = self._compute_closest_point_of_segment(segments) #返回一个vector起点终点中距离近的点
+        r_norm = np.linalg.norm(closest_points, axis=-1, keepdims=True) # 长度
+        r_unit_vector = closest_points / (r_norm + 1e-6) # 变成单位向量
         segment_end_minus_start = segments[:, 1, :] - segments[:, 0, :]
         segment_end_minus_start_norm = np.linalg.norm(
             segment_end_minus_start, axis=-1, keepdims=True)
         segment_unit_vector = segment_end_minus_start / (segment_end_minus_start_norm + 1e-6)
         segment_end_minus_r_norm = np.linalg.norm(
             segments[:, 1, :] - closest_points, axis=-1, keepdims=True)
-        segment_type_ohe = np.eye(self.n_segment_types)[types]
+        segment_type_ohe = np.eye(self.n_segment_types)[types] #20
         resulting_embeddings = np.concatenate([
             r_norm, r_unit_vector, segment_unit_vector, segment_end_minus_start_norm,
             segment_end_minus_r_norm, segment_type_ohe], axis=-1)
@@ -257,10 +257,10 @@ class MultiPathPPRenderer(Renderer):
 
     def render(self, data):
         array_of_scene_data_dicts = []
-        self._preprocess_data(data)
-        road_network_info = self._prepare_roadnetwork_info(data)
-        agent_history_info = self._prepare_agent_history(data)
-        for i in range(agent_history_info["history/xy"].shape[0]):
+        self._preprocess_data(data) # 过滤一些数据
+        road_network_info = self._prepare_roadnetwork_info(data) #两个元素 segments(N_segments,2,2) , segment_types(N_segments,1) 
+        agent_history_info = self._prepare_agent_history(data) # agent的数据
+        for i in range(agent_history_info["history/xy"].shape[0]): # 遍历每个agent
             if not self._target_agent_filter.allow(data, i):
                 continue
             current_agent_scene_shift = agent_history_info["history/xy"][i][-1]
@@ -268,10 +268,10 @@ class MultiPathPPRenderer(Renderer):
             current_scene_road_network_coordinates = self._transfrom_to_agent_coordinate_system(
                 road_network_info["segments"], current_agent_scene_shift, current_agent_scene_yaw)
             current_scene_road_network_coordinates, current_scene_road_network_types = \
-                self._filter_closest_segments(
-                    current_scene_road_network_coordinates, road_network_info["segment_types"])
+                self._filter_closest_segments(#选择150m以内的segments
+                    current_scene_road_network_coordinates, road_network_info["segment_types"]) 
             current_scene_road_network_coordinates = self._normalize_tensor(
-                current_scene_road_network_coordinates,
+                current_scene_road_network_coordinates, # x-u/std 标准化
                 **get_normalize_data()["road_network_segments"])
             road_segments_embeddings = self._generate_segment_embeddings(
                 current_scene_road_network_coordinates, current_scene_road_network_types)
@@ -325,7 +325,7 @@ class MultiPathPPRenderer(Renderer):
                 "other/history/speed": current_scene_other_agents_speed_history,
                 "other/history/valid": np.delete(agent_history_info["history/valid"], i, axis=0),
 
-                "road_network_embeddings": road_segments_embeddings,
+                "road_network_embeddings": road_segments_embeddings, # (N,1,27)
                 "road_network_segments": current_scene_road_network_coordinates
             }
             scene_data["trajectory_bucket"] = self._get_trajectory_class(scene_data)

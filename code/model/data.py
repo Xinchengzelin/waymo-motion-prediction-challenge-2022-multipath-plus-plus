@@ -116,7 +116,7 @@ class MultiPathPPDataset(Dataset):
     def _generate_sin_cos(self, data):
         data["target/history/yaw_sin"] = np.sin(data["target/history/yaw"])
         data["target/history/yaw_cos"] = np.cos(data["target/history/yaw"])
-        data["other/history/yaw_sin"] = np.sin(data["other/history/yaw"])
+        data["other/history/yaw_sin"] = np.sin(data["other/history/yaw"]) # (num_other_obs, 11,1)
         data["other/history/yaw_cos"] = np.cos(data["other/history/yaw"])
         return data
     
@@ -127,7 +127,7 @@ class MultiPathPPDataset(Dataset):
             data["target/width"].reshape(-1, 1, 1) * np.ones_like(data["target/history/yaw"])
 
         data["other/history/length"] = \
-            data["other/length"].reshape(-1, 1, 1) * np.ones_like(data["other/history/yaw"])
+            data["other/length"].reshape(-1, 1, 1) * np.ones_like(data["other/history/yaw"]) # (num_other_obs,11,1)
         data["other/history/width"] = \
             data["other/width"].reshape(-1, 1, 1) * np.ones_like(data["other/history/yaw"])
         return data
@@ -148,7 +148,7 @@ class MultiPathPPDataset(Dataset):
             np.concatenate([
                 data["target/history/valid"][:, 1:, :],
                 np.zeros((data["target/history/valid"].shape[0], 1, 1))
-            ], axis=1))[:, :-1, :]
+            ], axis=1))[:, :-1, :] # 求差的两个都valid，diff结果才valid
         data["other/history/valid_diff"] = (data["other/history/valid"] * \
             np.concatenate([data["other/history/valid"][:, 1:, :],
             np.zeros((data["other/history/valid"].shape[0], 1, 1))], axis=1))[:, :-1, :]
@@ -158,7 +158,7 @@ class MultiPathPPDataset(Dataset):
         I = np.eye(5)
         agent_type_ohe = I[np.array(data[f"{subject}/agent_type"])]
         is_sdc = np.array(data[f"{subject}/is_sdc"]).reshape(-1, 1)
-        ohe_data = np.concatenate([agent_type_ohe, is_sdc], axis=-1)[:, None, :]
+        ohe_data = np.concatenate([agent_type_ohe, is_sdc], axis=-1)[:, None, :] # (1,1,6)
         ohe_data = np.repeat(ohe_data, data["target/history/xy"].shape[1], axis=1)
         return ohe_data
     
@@ -171,7 +171,7 @@ class MultiPathPPDataset(Dataset):
         keys_to_stack = self._config["lstm_input_data"]
         keys_to_stack_diff = self._config["lstm_input_data_diff"]
         for subject in ["target", "other"]:
-            agent_type_ohe = self._compute_agent_type_and_is_sdc_ohe(data, subject)
+            agent_type_ohe = self._compute_agent_type_and_is_sdc_ohe(data, subject) #计算one_hot_encoding(ohe) (1,11,6)
             data[f"{subject}/history/lstm_data"] = np.concatenate(
                 [data[f"{subject}/history/{k}"] for k in keys_to_stack] + [agent_type_ohe], axis=-1)
             data[f"{subject}/history/lstm_data"] *= data[f"{subject}/history/valid"]
@@ -200,15 +200,15 @@ class MultiPathPPDataset(Dataset):
             np_data = dict(np.load(self._files[0], allow_pickle=True))
         np_data["scenario_id"] = np_data["scenario_id"].item()
         np_data["filename"] = self._files[idx]
-        np_data["target/history/yaw"] = angle_to_range(np_data["target/history/yaw"])
-        np_data["other/history/yaw"] = angle_to_range(np_data["other/history/yaw"])
-        np_data = self._generate_sin_cos(np_data)
-        np_data = self._add_length_width(np_data)
+        np_data["target/history/yaw"] = angle_to_range(np_data["target/history/yaw"]) #(1,11,1)
+        np_data["other/history/yaw"] = angle_to_range(np_data["other/history/yaw"]) #(num_other_obs, 11,1)
+        np_data = self._generate_sin_cos(np_data) # 增加yaw的sin,cos的值
+        np_data = self._add_length_width(np_data) # 
         if self._config["mask_history"]:
             for subject in ["target", "other"]:
                 np_data[f"{subject}/history/valid"] = self._mask_history(
-                        np_data[f"{subject}/history/valid"], self._config["mask_history_fraction"])
-        np_data = self._compute_agent_diff_features(np_data)
+                        np_data[f"{subject}/history/valid"], self._config["mask_history_fraction"]) #为了应对某些种类的过拟合
+        np_data = self._compute_agent_diff_features(np_data) #计算diff feature
         np_data = self._compute_lstm_input_data(np_data)
         np_data = self._compute_mcg_input_data(np_data)
         return np_data

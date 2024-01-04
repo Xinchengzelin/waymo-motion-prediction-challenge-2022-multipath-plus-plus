@@ -36,8 +36,12 @@ def get_git_revision_short_hash():
     return subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('ascii').strip()
 
 
-config = get_config(sys.argv[1])
-alias = sys.argv[1].split("/")[-1].split(".")[0]
+# config = get_config(sys.argv[1])
+# alias = sys.argv[1].split("/")[-1].split(".")[0]
+
+path = "configs/final_RoP_Cov_Single.yaml"
+config = get_config("configs/final_RoP_Cov_Single.yaml")
+alias = path.split("/")[-1].split(".")[0]
 try:
     models_path = os.path.join("../models", f"{alias}__{get_git_revision_short_hash()}")
     os.mkdir(tb_path)
@@ -79,8 +83,8 @@ for epoch in tqdm(range(config["train"]["n_epochs"])):
         assert torch.isfinite(coordinates).all()
         assert torch.isfinite(probas).all()
         assert torch.isfinite(covariance_matrices).all()
-        xy_future_gt = data["target/future/xy"]
-        if config["train"]["normalize_output"]:
+        xy_future_gt = data["target/future/xy"] # (B,80,2 )
+        if config["train"]["normalize_output"]: # 设定为True
             # assert not (config["train"]["normalize_output"] and config["train"]["trainable_cov"])
             xy_future_gt = (data["target/future/xy"] - torch.Tensor([1.4715e+01, 4.3008e-03]).cuda()) / 10.
             assert torch.isfinite(xy_future_gt).all()
